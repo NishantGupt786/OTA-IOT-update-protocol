@@ -1,1 +1,5 @@
 main.tar
+main.tar.sig
+ota_private.pem
+ota_public.pem
+version.yaml.sig

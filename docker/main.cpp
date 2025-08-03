@@ -5,9 +5,8 @@
 int main() {
     int counter = 0;
     while (true) {
-        std::cout << "Hello from Nishant Gupta C++ app! Count: " << counter++ << std::endl;
+        std::cout << "Hello from Nishant C++ app! Count: " << counter++ << std::endl;
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
     return 0;
 }
-
