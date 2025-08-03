@@ -33,7 +33,6 @@ if [ ! -f "$LOCAL_VERSION" ]; then
         echo "Could not determine loaded image name!"
         exit 1
     fi
-    # Remove any running/stopped containers with this name (safety)
     if sudo docker ps -a --format '{{.Names}}' | grep -Eq "^${CONTAINER_NAME}\$"; then
         sudo docker rm -f "$CONTAINER_NAME"
     fi
@@ -64,23 +63,42 @@ if [[ "$LAST_REMOTE" > "$LAST_LOCAL" ]]; then
     fi
     CONTAINER_RUNNING=$(sudo docker ps --format '{{.Names}}' | grep -x "$CONTAINER_NAME" || true)
     if [ -n "$CONTAINER_RUNNING" ]; then
-        # Start new container with a new name (to avoid port conflicts, adjust as needed)
-        echo "Existing container running—spinning up new container as ${CONTAINER_NAME}_new."
-        sudo docker run -d --name "${CONTAINER_NAME}_new" "$IMAGE_NAME"
-        # Wait a moment (or optionally healthcheck), then gracefully switch
+        # Start new container with a new temporary name
+        NEW_CONTAINER="${CONTAINER_NAME}_new"
+        echo "Existing container running—starting new container as $NEW_CONTAINER."
+        sudo docker run -d --name "$NEW_CONTAINER" "$IMAGE_NAME"
+        # Wait for a short moment; optionally, implement health check here
         sleep 2
+        echo "Stopping old container $CONTAINER_NAME..."
         sudo docker stop "$CONTAINER_NAME"
+        echo "Removing old container $CONTAINER_NAME..."
         sudo docker rm "$CONTAINER_NAME"
-        sudo docker rename "${CONTAINER_NAME}_new" "$CONTAINER_NAME"
-        echo "Seamless update—no downtime!"
+        echo "Renaming new container $NEW_CONTAINER to $CONTAINER_NAME..."
+        sudo docker rename "$NEW_CONTAINER" "$CONTAINER_NAME"
+        echo "Container successfully updated with no downtime."
     else
         # Start fresh if no running container
         sudo docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
         sudo docker run -d --name "$CONTAINER_NAME" "$IMAGE_NAME"
-        echo "Started new container."
+        echo "Started new container from scratch."
     fi
     cp "$NEW_VERSION_TMP" "$LOCAL_VERSION"
     echo "Update complete. Local version.yaml updated."
+
+    # Remove all containers except the active one
+    for c in $(sudo docker ps -a --format '{{.ID}} {{.Names}}' | grep -v "^$CONTAINER_NAME$" | awk '{print $1}'); do
+        sudo docker rm -f "$c" || true
+    done
+
+    # Remove dangling images (untagged, unused)
+    sudo docker image prune -f
+
+    # Remove all old images matching current image name but not currently used
+    ACTIVE_IMAGE_ID=$(sudo docker inspect --format '{{.Image}}' "$CONTAINER_NAME")
+    for img in $(sudo docker images --filter=reference="${IMAGE_NAME}" --quiet | grep -v "$ACTIVE_IMAGE_ID"); do
+        sudo docker rmi -f "$img" || true
+    done
+
 else
     echo "No update needed. Remote version is not newer than local."
 fi
