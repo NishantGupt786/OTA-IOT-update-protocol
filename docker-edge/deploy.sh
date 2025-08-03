@@ -2,7 +2,7 @@
 set -e
 
 # ==== USER VARIABLES ====
-DIRECTORY_NAME="docker-edge"
+DIRECTORY_NAME=$(basename "$(dirname "$PWD")")
 PRG_FILE_NAME="main"
 DOCKER_IMAGE_TAG="1.0"
 S3_BUCKET="iot-ota-rtupdate"

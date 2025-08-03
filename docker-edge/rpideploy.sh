@@ -28,7 +28,9 @@ done
 
 # 2. Verify version.yaml signature
 openssl dgst -sha256 -binary "$NEW_VERSION_TMP" > version.check.sha256
-openssl pkeyutl -verify -pubin -inkey "$PUBLIC_KEY" -in "$VERSION_SIG" -sigfile version.check.sha256
+openssl pkeyutl -verify -pubin -inkey "$PUBLIC_KEY" \
+    -in version.check.sha256 \
+    -sigfile "$VERSION_SIG"
 if [ $? -ne 0 ]; then
     echo "version.yaml signature verification failed!"
     exit 1
@@ -36,7 +38,9 @@ fi
 
 # 3. Verify main.tar signature
 openssl dgst -sha256 -binary "$IMAGE_TAR" > main.tar.check.sha256
-openssl pkeyutl -verify -pubin -inkey "$PUBLIC_KEY" -in "$IMAGE_SIG" -sigfile main.tar.check.sha256
+openssl pkeyutl -verify -pubin -inkey "$PUBLIC_KEY" \
+    -in main.tar.check.sha256 \
+    -sigfile "$IMAGE_SIG"
 if [ $? -ne 0 ]; then
     echo "main.tar signature verification failed!"
     exit 1
@@ -44,7 +48,7 @@ fi
 
 rm -f *.sha256
 
-# 4. Update logic (as before)
+# 4. Update logic
 if [ ! -f "$LOCAL_VERSION" ]; then
     echo "No previous version.yaml found. Performing first-time setup."
     DOCKER_LOAD_OUT=$(sudo docker load -i "$IMAGE_TAR")
@@ -89,7 +93,7 @@ if [[ "$LAST_REMOTE" > "$LAST_LOCAL" ]]; then
     fi
     cp "$NEW_VERSION_TMP" "$LOCAL_VERSION"
     echo "Update complete. Local version.yaml updated."
-    # (container/image cleanup code as before)
+    # (add any post-update cleanup or logging here)
 else
     echo "No update needed. Remote version is not newer than local."
 fi
