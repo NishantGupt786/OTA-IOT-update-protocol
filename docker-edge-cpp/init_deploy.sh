@@ -133,6 +133,17 @@ aws s3 cp $VERSION_FILE s3://$S3_BUCKET/$DIRECTORY_NAME/$VERSION_FILE
 aws s3 cp $VERSION_SIG s3://$S3_BUCKET/$DIRECTORY_NAME/$VERSION_SIG
 aws s3 cp $PUBLIC_KEY s3://$S3_BUCKET/$DIRECTORY_NAME/$PUBLIC_KEY
 
+if [[ -f docker-compose.yml ]]; then
+  COMPOSE_FILE="docker-compose.yml"
+  COMPOSE_SIG="docker-compose.yml.sig"
+  openssl dgst -sha256 -binary "$COMPOSE_FILE" > compose.check.sha256
+  openssl pkeyutl -sign -inkey "$PRIVATE_KEY" -in compose.check.sha256 -out "$COMPOSE_SIG"
+  aws s3 cp "$COMPOSE_FILE" s3://$S3_BUCKET/$DIRECTORY_NAME/$COMPOSE_FILE
+  aws s3 cp "$COMPOSE_SIG" s3://$S3_BUCKET/$DIRECTORY_NAME/$COMPOSE_SIG
+  rm -f compose.check.sha256
+fi
+
+
 rm -f *.sha256
 
 EDGE_DEPLOY_SCRIPT="edge_deploy.sh"
@@ -158,6 +169,8 @@ curl -sSf -o "\$VERSION_SIG"     "\$S3_BASE_URL/\$VERSION_SIG"
 curl -sSf -o "\$IMAGE_TAR"       "\$S3_BASE_URL/\$IMAGE_TAR"
 curl -sSf -o "\$IMAGE_SIG"       "\$S3_BASE_URL/\$IMAGE_SIG"
 curl -sSf -o "\$PUBLIC_KEY"      "\$S3_BASE_URL/\$PUBLIC_KEY"
+curl -sSf -o "docker-compose.yml" "\$S3_BASE_URL/docker-compose.yml" || true
+curl -sSf -o "docker-compose.yml.sig" "\$S3_BASE_URL/docker-compose.yml.sig" || true
 
 for f in "\$NEW_VERSION_TMP" "\$VERSION_SIG" "\$IMAGE_TAR" "\$IMAGE_SIG" "\$PUBLIC_KEY"; do
     [ -s "\$f" ] || { echo "Missing or empty \$f"; exit 1; }
@@ -171,7 +184,18 @@ openssl pkeyutl -verify -pubin -inkey "\$PUBLIC_KEY" \
 openssl dgst -sha256 -binary "\$IMAGE_TAR" > image.check.sha256
 openssl pkeyutl -verify -pubin -inkey "\$PUBLIC_KEY" \
     -in image.check.sha256 \
-    -sigfile "\$IMAGE_SIG" || { echo "${IMAGE_TAR} signature verification failed!"; exit 1; }
+    -sigfile "\$IMAGE_SIG" || { echo "$IMAGE_TAR signature verification failed!"; exit 1; }
+
+if [[ -f docker-compose.yml && -f docker-compose.yml.sig ]]; then
+  openssl dgst -sha256 -binary docker-compose.yml > compose.check.sha256
+  openssl pkeyutl -verify -pubin -inkey "$PUBLIC_KEY" \
+      -in compose.check.sha256 \
+      -sigfile docker-compose.yml.sig || { echo "docker-compose.yml signature verification failed!"; exit 1; }
+  rm -f compose.check.sha256
+  COMPOSE_MODE=true
+else
+  COMPOSE_MODE=false
+fi
 
 rm -f *.sha256
 
@@ -184,10 +208,15 @@ if [ ! -f "\$LOCAL_VERSION" ]; then
         echo "Could not determine loaded image name!"
         exit 1
     fi
-    if sudo docker ps -a --format '{{.Names}}' | grep -Eq "^\\\${CONTAINER_NAME}\\\$"; then
-        sudo docker rm -f "\$CONTAINER_NAME"
-    fi
-    sudo docker run -d --name "\$CONTAINER_NAME" "\$IMAGE_NAME"
+
+    if [[ "\$COMPOSE_MODE" == true ]]; then
+        sudo docker compose down || true
+        sudo docker compose up -d
+    else
+        if sudo docker ps -a --format '{{.Names}}' | grep -Eq "^\\\${CONTAINER_NAME}\\\$"; then
+            sudo docker rm -f "\$CONTAINER_NAME"
+        fi
+        sudo docker run -d --name "\$CONTAINER_NAME" "\$IMAGE_NAME"
     cp "\$NEW_VERSION_TMP" "\$LOCAL_VERSION"
     echo "Initialized local version.yaml."
     exit 0
@@ -205,17 +234,23 @@ if [[ "\$LAST_REMOTE" > "\$LAST_LOCAL" ]]; then
         echo "Could not determine loaded image name during update!"
         exit 1
     fi
-    CONTAINER_RUNNING=\$(sudo docker ps --format '{{.Names}}' | grep -x "\$CONTAINER_NAME" || true)
-    if [ -n "\$CONTAINER_RUNNING" ]; then
-        NEW_CONTAINER="\${CONTAINER_NAME}_new"
-        sudo docker run -d --name "\$NEW_CONTAINER" "\$IMAGE_NAME"
-        sleep 2
-        sudo docker stop "\$CONTAINER_NAME"
-        sudo docker rm "\$CONTAINER_NAME"
-        sudo docker rename "\$NEW_CONTAINER" "\$CONTAINER_NAME"
+
+    if [[ "\$COMPOSE_MODE" == true ]]; then
+        sudo docker compose down || true
+        sudo docker compose up -d
     else
-        sudo docker rm -f "\$CONTAINER_NAME" 2>/dev/null || true
-        sudo docker run -d --name "\$CONTAINER_NAME" "\$IMAGE_NAME"
+        CONTAINER_RUNNING=\$(sudo docker ps --format '{{.Names}}' | grep -x "\$CONTAINER_NAME" || true)
+        if [ -n "\$CONTAINER_RUNNING" ]; then
+            NEW_CONTAINER="\${CONTAINER_NAME}_new"
+            sudo docker run -d --name "\$NEW_CONTAINER" "\$IMAGE_NAME"
+            sleep 2
+            sudo docker stop "\$CONTAINER_NAME"
+            sudo docker rm "\$CONTAINER_NAME"
+            sudo docker rename "\$NEW_CONTAINER" "\$CONTAINER_NAME"
+        else
+            sudo docker rm -f "\$CONTAINER_NAME" 2>/dev/null || true
+            sudo docker run -d --name "\$CONTAINER_NAME" "\$IMAGE_NAME"
+        fi
     fi
     cp "\$NEW_VERSION_TMP" "\$LOCAL_VERSION"
     echo "Update complete."
@@ -257,6 +292,15 @@ aws s3 cp \$IMAGE_TAR s3://\$S3_BUCKET/\$DIRECTORY_NAME/\$IMAGE_TAR
 aws s3 cp \$IMAGE_SIG s3://\$S3_BUCKET/\$DIRECTORY_NAME/\$IMAGE_SIG
 aws s3 cp \$VERSION_FILE s3://\$S3_BUCKET/\$DIRECTORY_NAME/\$VERSION_FILE
 aws s3 cp \$VERSION_SIG s3://\$S3_BUCKET/\$DIRECTORY_NAME/\$VERSION_SIG
+if [[ -f docker-compose.yml ]]; then
+  COMPOSE_FILE="docker-compose.yml"
+  COMPOSE_SIG="docker-compose.yml.sig"
+  openssl dgst -sha256 -binary "\$COMPOSE_FILE" > compose.check.sha256
+  openssl pkeyutl -sign -inkey "\$PRIVATE_KEY" -in compose.check.sha256 -out "\$COMPOSE_SIG"
+  aws s3 cp "\$COMPOSE_FILE" s3://\$S3_BUCKET/\$DIRECTORY_NAME/\$COMPOSE_FILE
+  aws s3 cp "\$COMPOSE_SIG" s3://\$S3_BUCKET/\$DIRECTORY_NAME/\$COMPOSE_SIG
+  rm -f compose.check.sha256
+fi
 
 rm -f *.sha256
 
