@@ -1,7 +1,7 @@
 #!/bin/bash
 set -ex
 
-S3_BASE_URL="https://iot-ota-rtupdate.s3.amazonaws.com/docker-edge"
+S3_BASE_URL="https://iot-ota-rtupdate.s3.amazonaws.com/docker-edge-cpp"
 WORKDIR="$HOME/docker-edge-app"
 CONTAINER_NAME="main_ota_app"
 mkdir -p "$WORKDIR"
@@ -14,41 +14,24 @@ IMAGE_TAR="main.tar"
 IMAGE_SIG="main.tar.sig"
 PUBLIC_KEY="ota_public.pem"
 
-# 1. Fetch files
-wget -O "$NEW_VERSION_TMP" "$S3_BASE_URL/version.yaml"
-wget -O "$VERSION_SIG"     "$S3_BASE_URL/version.yaml.sig"
-wget -O "$IMAGE_TAR"       "$S3_BASE_URL/main.tar"
-wget -O "$IMAGE_SIG"       "$S3_BASE_URL/main.tar.sig"
-wget -O "$PUBLIC_KEY"      "$S3_BASE_URL/ota_public.pem"
+wget -O "$NEW_VERSION_TMP" "$S3_BASE_URL/$LOCAL_VERSION"
+wget -O "$VERSION_SIG"     "$S3_BASE_URL/$VERSION_SIG"
+wget -O "$IMAGE_TAR"       "$S3_BASE_URL/$IMAGE_TAR"
+wget -O "$IMAGE_SIG"       "$S3_BASE_URL/$IMAGE_SIG"
+wget -O "$PUBLIC_KEY"      "$S3_BASE_URL/$PUBLIC_KEY"
 
-# Exit if any file is missing/zero size
 for f in "$NEW_VERSION_TMP" "$VERSION_SIG" "$IMAGE_TAR" "$IMAGE_SIG" "$PUBLIC_KEY"; do
     [ -s "$f" ] || { echo "Missing or empty $f"; exit 1; }
 done
 
-# 2. Verify version.yaml signature
 openssl dgst -sha256 -binary "$NEW_VERSION_TMP" > version.check.sha256
-openssl pkeyutl -verify -pubin -inkey "$PUBLIC_KEY" \
-    -in version.check.sha256 \
-    -sigfile "$VERSION_SIG"
-if [ $? -ne 0 ]; then
-    echo "version.yaml signature verification failed!"
-    exit 1
-fi
+openssl pkeyutl -verify -pubin -inkey "$PUBLIC_KEY"     -in version.check.sha256     -sigfile "$VERSION_SIG" || { echo "version.yaml signature verification failed!"; exit 1; }
 
-# 3. Verify main.tar signature
-openssl dgst -sha256 -binary "$IMAGE_TAR" > main.tar.check.sha256
-openssl pkeyutl -verify -pubin -inkey "$PUBLIC_KEY" \
-    -in main.tar.check.sha256 \
-    -sigfile "$IMAGE_SIG"
-if [ $? -ne 0 ]; then
-    echo "main.tar signature verification failed!"
-    exit 1
-fi
+openssl dgst -sha256 -binary "$IMAGE_TAR" > image.check.sha256
+openssl pkeyutl -verify -pubin -inkey "$PUBLIC_KEY"     -in image.check.sha256     -sigfile "$IMAGE_SIG" || { echo "main.tar signature verification failed!"; exit 1; }
 
 rm -f *.sha256
 
-# 4. Update logic
 if [ ! -f "$LOCAL_VERSION" ]; then
     echo "No previous version.yaml found. Performing first-time setup."
     DOCKER_LOAD_OUT=$(sudo docker load -i "$IMAGE_TAR")
@@ -58,7 +41,7 @@ if [ ! -f "$LOCAL_VERSION" ]; then
         echo "Could not determine loaded image name!"
         exit 1
     fi
-    if sudo docker ps -a --format '{{.Names}}' | grep -Eq "^${CONTAINER_NAME}\$"; then
+    if sudo docker ps -a --format '{{.Names}}' | grep -Eq "^\${CONTAINER_NAME}\$"; then
         sudo docker rm -f "$CONTAINER_NAME"
     fi
     sudo docker run -d --name "$CONTAINER_NAME" "$IMAGE_NAME"
@@ -71,7 +54,7 @@ LAST_LOCAL=$(grep last_build "$LOCAL_VERSION" | awk '{print $2}' | tr -d '"')
 LAST_REMOTE=$(grep last_build "$NEW_VERSION_TMP" | awk '{print $2}' | tr -d '"')
 
 if [[ "$LAST_REMOTE" > "$LAST_LOCAL" ]]; then
-    echo "Newer version detected. Performing rolling update to minimize downtime."
+    echo "Newer version detected. Performing rolling update."
     DOCKER_LOAD_OUT=$(sudo docker load -i "$IMAGE_TAR")
     echo "$DOCKER_LOAD_OUT"
     IMAGE_NAME=$(echo "$DOCKER_LOAD_OUT" | grep 'Loaded image:' | awk '{print $3}')
@@ -92,8 +75,7 @@ if [[ "$LAST_REMOTE" > "$LAST_LOCAL" ]]; then
         sudo docker run -d --name "$CONTAINER_NAME" "$IMAGE_NAME"
     fi
     cp "$NEW_VERSION_TMP" "$LOCAL_VERSION"
-    echo "Update complete. Local version.yaml updated."
-    # (add any post-update cleanup or logging here)
+    echo "Update complete."
 else
-    echo "No update needed. Remote version is not newer than local."
+    echo "No update needed."
 fi
