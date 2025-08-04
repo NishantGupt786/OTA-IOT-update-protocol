@@ -14,11 +14,11 @@ IMAGE_TAR="main.tar"
 IMAGE_SIG="main.tar.sig"
 PUBLIC_KEY="ota_public.pem"
 
-wget -O "$NEW_VERSION_TMP" "$S3_BASE_URL/$LOCAL_VERSION"
-wget -O "$VERSION_SIG"     "$S3_BASE_URL/$VERSION_SIG"
-wget -O "$IMAGE_TAR"       "$S3_BASE_URL/$IMAGE_TAR"
-wget -O "$IMAGE_SIG"       "$S3_BASE_URL/$IMAGE_SIG"
-wget -O "$PUBLIC_KEY"      "$S3_BASE_URL/$PUBLIC_KEY"
+curl -sSf -o "$NEW_VERSION_TMP" "$S3_BASE_URL/$LOCAL_VERSION"
+curl -sSf -o "$VERSION_SIG"     "$S3_BASE_URL/$VERSION_SIG"
+curl -sSf -o "$IMAGE_TAR"       "$S3_BASE_URL/$IMAGE_TAR"
+curl -sSf -o "$IMAGE_SIG"       "$S3_BASE_URL/$IMAGE_SIG"
+curl -sSf -o "$PUBLIC_KEY"      "$S3_BASE_URL/$PUBLIC_KEY"
 
 for f in "$NEW_VERSION_TMP" "$VERSION_SIG" "$IMAGE_TAR" "$IMAGE_SIG" "$PUBLIC_KEY"; do
     [ -s "$f" ] || { echo "Missing or empty $f"; exit 1; }

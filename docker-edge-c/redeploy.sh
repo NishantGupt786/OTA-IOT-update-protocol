@@ -1,37 +1,9 @@
 #!/bin/bash
 set -e
 
-echo "Choose programming language:"
-select LANGUAGE in cpp c python java; do
-  case $LANGUAGE in
-    cpp|c|python|java)
-      break
-      ;;
-    *)
-      echo "Invalid choice. Try again."
-      ;;
-  esac
-done
-
-echo "Choose edge device:"
-select EDGE_DEVICE in rpi3b jetsonnano jetsonorin x86_64; do
-  case $EDGE_DEVICE in
-    rpi3b|jetsonnano|jetsonorin|x86_64)
-      break
-      ;;
-    *)
-      echo "Invalid choice. Try again."
-      ;;
-  esac
-done
-
-case "$EDGE_DEVICE" in
-  rpi3b)       PLATFORM="linux/arm/v7" ;;
-  jetsonnano)  PLATFORM="linux/arm64" ;;
-  jetsonorin)  PLATFORM="linux/arm64" ;;
-  x86_64)      PLATFORM="linux/amd64" ;;
-esac
-
+PLATFORM="linux/arm/v7"
+LANGUAGE="c"
+EDGE_DEVICE="rpi3b"
 PRG_FILE_NAME="main"
 DOCKER_IMAGE_TAG="1.0"
 S3_BUCKET="iot-ota-rtupdate"

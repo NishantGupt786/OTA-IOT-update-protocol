@@ -14,6 +14,6 @@ int main() {
     fscanf(fp, "%d", &temp);
     fclose(fp);
 
-    printf("CPU Temperature: %.2f°C\n", temp / 1000.0);
+    printf("Current CPU Temperature: %.2f°C\n", temp / 1000.0);
     return 0;
 }
