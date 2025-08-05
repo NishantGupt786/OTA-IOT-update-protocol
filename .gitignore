@@ -4,3 +4,4 @@ ota_private.pem
 ota_public.pem
 version.yaml.sig
 docker-compose.yml.sig
+inventory.ini

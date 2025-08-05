@@ -1,8 +1,8 @@
 #!/bin/bash
 set -ex
 
-S3_BASE_URL="https://iot-ota-rtupdate.s3.amazonaws.com/docker-edge-c"
-WORKDIR="docker-edge-c"
+S3_BASE_URL="https://iot-ota-rtupdate.s3.amazonaws.com/docker-edge-py"
+WORKDIR="docker-edge-py"
 CONTAINER_NAME="main_ota_app"
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"

@@ -2,7 +2,7 @@
 set -e
 
 PLATFORM="linux/arm/v7"
-LANGUAGE="c"
+LANGUAGE="python"
 EDGE_DEVICE="rpi3b"
 PRG_FILE_NAME="main"
 DOCKER_IMAGE_TAG="1.0"

@@ -2,14 +2,14 @@
 set -ex
 
 S3_BASE_URL="https://iot-ota-rtupdate.s3.amazonaws.com/docker-compose-edge-cpp"
-WORKDIR="$HOME/docker-edge-app"
+WORKDIR="docker-compose-edge-cpp"
 CONTAINER_NAME="main_ota_app"
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
 LOCAL_VERSION="version.yaml"
 NEW_VERSION_TMP="version_remote.yaml"
-VERSION_SIG="version_remote.yaml.sig"
+VERSION_SIG="version.yaml.sig"
 IMAGE_TAR="main.tar"
 IMAGE_SIG="main.tar.sig"
 PUBLIC_KEY="ota_public.pem"
@@ -57,13 +57,12 @@ if [ ! -f "$LOCAL_VERSION" ]; then
         sudo docker compose down || true
         sudo docker compose up -d
     else
-        if sudo docker ps -a --format '{{.Names}}' | grep -Eq "^\${CONTAINER_NAME}\$"; then
-            sudo docker rm -f "$CONTAINER_NAME"
-        fi
+        sudo docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
         sudo docker run -d --name "$CONTAINER_NAME" "$IMAGE_NAME"
-    cp "$NEW_VERSION_TMP" "$LOCAL_VERSION"
-    echo "Initialized local version.yaml."
-    exit 0
+        cp "$NEW_VERSION_TMP" "$LOCAL_VERSION"
+        echo "Initialized local version.yaml."
+        exit 0
+    fi
 fi
 
 LAST_LOCAL=$(grep last_build "$LOCAL_VERSION" | awk '{print $2}' | tr -d '"')

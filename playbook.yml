@@ -1,0 +1,13 @@
+---
+- name: Deploy edge_deploy.sh to all edge devices
+  hosts: edge_devices
+  gather_facts: no
+  vars_files:
+    - vault.yml
+
+  tasks:
+    - name: Copy deployment script to /
+      ansible.builtin.copy:
+        src: docker-edge-cpp/edge_deploy.sh
+        dest: /edge_deploy.sh
+        mode: '0755'

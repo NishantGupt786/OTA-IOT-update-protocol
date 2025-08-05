@@ -30,6 +30,15 @@ aws s3 cp $IMAGE_TAR s3://$S3_BUCKET/$DIRECTORY_NAME/$IMAGE_TAR
 aws s3 cp $IMAGE_SIG s3://$S3_BUCKET/$DIRECTORY_NAME/$IMAGE_SIG
 aws s3 cp $VERSION_FILE s3://$S3_BUCKET/$DIRECTORY_NAME/$VERSION_FILE
 aws s3 cp $VERSION_SIG s3://$S3_BUCKET/$DIRECTORY_NAME/$VERSION_SIG
+if [[ -f docker-compose.yml ]]; then
+  COMPOSE_FILE="docker-compose.yml"
+  COMPOSE_SIG="docker-compose.yml.sig"
+  openssl dgst -sha256 -binary "$COMPOSE_FILE" > compose.check.sha256
+  openssl pkeyutl -sign -inkey "$PRIVATE_KEY" -in compose.check.sha256 -out "$COMPOSE_SIG"
+  aws s3 cp "$COMPOSE_FILE" s3://$S3_BUCKET/$DIRECTORY_NAME/$COMPOSE_FILE
+  aws s3 cp "$COMPOSE_SIG" s3://$S3_BUCKET/$DIRECTORY_NAME/$COMPOSE_SIG
+  rm -f compose.check.sha256
+fi
 
 rm -f *.sha256
 
