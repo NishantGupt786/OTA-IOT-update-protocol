@@ -131,7 +131,6 @@ aws s3 cp $IMAGE_TAR s3://$S3_BUCKET/$DIRECTORY_NAME/$IMAGE_TAR
 aws s3 cp $IMAGE_SIG s3://$S3_BUCKET/$DIRECTORY_NAME/$IMAGE_SIG
 aws s3 cp $VERSION_FILE s3://$S3_BUCKET/$DIRECTORY_NAME/$VERSION_FILE
 aws s3 cp $VERSION_SIG s3://$S3_BUCKET/$DIRECTORY_NAME/$VERSION_SIG
-aws s3 cp $PUBLIC_KEY s3://$S3_BUCKET/$DIRECTORY_NAME/$PUBLIC_KEY
 
 if [[ -f docker-compose.yml ]]; then
   COMPOSE_FILE="docker-compose.yml"
@@ -168,7 +167,6 @@ curl -sSf -o "\$NEW_VERSION_TMP" "\$S3_BASE_URL/\$LOCAL_VERSION"
 curl -sSf -o "\$VERSION_SIG"     "\$S3_BASE_URL/\$VERSION_SIG"
 curl -sSf -o "\$IMAGE_TAR"       "\$S3_BASE_URL/\$IMAGE_TAR"
 curl -sSf -o "\$IMAGE_SIG"       "\$S3_BASE_URL/\$IMAGE_SIG"
-curl -sSf -o "\$PUBLIC_KEY"      "\$S3_BASE_URL/\$PUBLIC_KEY"
 curl -sSf -o "docker-compose.yml" "\$S3_BASE_URL/docker-compose.yml" || true
 curl -sSf -o "docker-compose.yml.sig" "\$S3_BASE_URL/docker-compose.yml.sig" || true
 

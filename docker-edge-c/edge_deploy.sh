@@ -18,7 +18,6 @@ curl -sSf -o "$NEW_VERSION_TMP" "$S3_BASE_URL/$LOCAL_VERSION"
 curl -sSf -o "$VERSION_SIG"     "$S3_BASE_URL/$VERSION_SIG"
 curl -sSf -o "$IMAGE_TAR"       "$S3_BASE_URL/$IMAGE_TAR"
 curl -sSf -o "$IMAGE_SIG"       "$S3_BASE_URL/$IMAGE_SIG"
-curl -sSf -o "$PUBLIC_KEY"      "$S3_BASE_URL/$PUBLIC_KEY"
 curl -sSf -o "docker-compose.yml" "$S3_BASE_URL/docker-compose.yml" || true
 curl -sSf -o "docker-compose.yml.sig" "$S3_BASE_URL/docker-compose.yml.sig" || true
 

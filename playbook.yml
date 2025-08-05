@@ -1,13 +1,21 @@
----
 - name: Deploy edge_deploy.sh to all edge devices
   hosts: edge_devices
   gather_facts: no
-  vars_files:
-    - vault.yml
-
   tasks:
-    - name: Copy deployment script to /
+    - name: Copy deployment script to ~/edge_deploy.sh
       ansible.builtin.copy:
         src: docker-edge-cpp/edge_deploy.sh
-        dest: /edge_deploy.sh
+        dest: "~/edge_deploy.sh"
         mode: '0755'
+
+    - name: Ensure ~/docker-edge-cpp directory exists
+      ansible.builtin.file:
+        path: "~/docker-edge-cpp"
+        state: directory
+        mode: '0755'
+
+    - name: Copy ota_public.pem into ~/docker-edge-cpp
+      ansible.builtin.copy:
+        src: docker-edge-cpp/ota_public.pem
+        dest: "~/docker-edge-cpp/ota_public.pem"
+        mode: '0644'
