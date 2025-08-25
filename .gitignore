@@ -5,3 +5,5 @@ ota_public.pem
 version.yaml.sig
 docker-compose.yml.sig
 inventory.ini
+*.pyc
+*.egg-info
