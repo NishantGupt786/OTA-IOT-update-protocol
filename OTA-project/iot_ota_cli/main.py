@@ -44,25 +44,19 @@ class Config:
 
 config = Config()
 
-def _run_ansible_playbook():
-    """Internal function to run the setup/trigger playbook."""
+def _run_ansible_playbook(playbook_file, extra_vars=None):
+    """Internal function to run an Ansible playbook."""
     if not load_inventory().get("edge_devices", {}).get("hosts"):
         console.print("[red]No devices configured. Use 'iot-ota devices add' first.[/red]")
         sys.exit(1)
     
-    missing_files = [f for f in ["edge_deploy.sh", "ota_public.pem"] if not Path(f).exists()]
-    if missing_files:
-        console.print(f"[red]Missing required files: {', '.join(missing_files)}. Run 'iot-ota init' first.[/red]")
-        sys.exit(1)
-    
-    create_setup_playbook()
-    
+    command = ["ansible-playbook", "-i", ANSIBLE_INVENTORY, playbook_file, "-v"]
+    if extra_vars:
+        command.extend(["--extra-vars", yaml.dump(extra_vars)])
+
     try:
-        console.print("Running Ansible playbook...")
-        result = subprocess.run(
-            ["ansible-playbook", "-i", ANSIBLE_INVENTORY, "setup_devices.yaml", "-v"],
-            capture_output=True, text=True
-        )
+        console.print(f"Running Ansible playbook: {playbook_file}...")
+        result = subprocess.run(command, capture_output=True, text=True)
         
         if result.returncode == 0:
             return True
@@ -125,6 +119,14 @@ def init():
         default="python"
     )
     
+    if project_config["language"] in ["c", "cpp"]:
+        project_config["additional_packages"] = Prompt.ask(
+            "Enter any additional APT packages to install (space-separated, e.g., libcpr-dev)",
+            default=""
+        )
+    else:
+        project_config["additional_packages"] = ""
+
     available_files = get_program_files_by_language(project_config["language"])
     
     if available_files:
@@ -172,7 +174,7 @@ def init():
     # --- Create Project Config ---
     project_config["version"] = "1.0.0"
     project_config["docker_image_tag"] = "1.0"
-    project_config["program_basename"] = get_program_file_basename(project_config["program_file"])
+    project_config["program_basename"] = get_program_file_basename(project_config["program_file"]).lower()
     
     with open("iot-ota.yaml", "w") as f:
         yaml.dump(project_config, f, default_flow_style=False)
@@ -185,8 +187,9 @@ def init():
     console.print(f"[cyan]Project config saved to: [bold]iot-ota.yaml[/bold][/cyan]")
     console.print(f"[cyan]Next steps:[/cyan]")
     console.print(f"  1. Configure your devices: [bold]iot-ota devices add[/bold]")
-    console.print(f"  2. Setup devices for OTA: [bold]iot-ota devices setup[/bold]")
-    console.print(f"  3. Build and deploy updates: [bold]iot-ota deploy[/bold]")
+    console.print(f"  2. Provision devices for passwordless access: [bold]iot-ota devices provision[/bold]")
+    console.print(f"  3. Run first-time agent setup: [bold]iot-ota devices setup[/bold]")
+    console.print(f"  4. Build and deploy updates: [bold]iot-ota deploy[/bold]")
 
 def run_init_script(project_config):
     """Creates and runs the legacy bash script to generate project files."""
@@ -205,7 +208,8 @@ def run_init_script(project_config):
         responses = [
             lang_map[project_config["language"]],
             device_map[project_config["edge_device"]],
-            project_config["program_file"]
+            project_config["program_file"],
+            project_config.get("additional_packages", "") # **NEW**: Pass packages
         ]
         
         with Progress(
@@ -225,7 +229,7 @@ def run_init_script(project_config):
             )
             
             input_data = "\n".join(responses) + "\n"
-            stdout, stderr = process.communicate(input=input_data, timeout=300) # 5-min timeout
+            stdout, stderr = process.communicate(input=input_data, timeout=300)
             
             if process.returncode != 0:
                 progress.stop()
@@ -245,6 +249,7 @@ def run_init_script(project_config):
     finally:
         if os.path.exists(script_path):
             os.unlink(script_path)
+
 
 @cli.command()
 @click.option('--no-upload', is_flag=True, help="Build the Docker image locally without uploading.")
@@ -266,26 +271,32 @@ def build(no_upload):
         command.append("--no-upload")
 
     try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task_description = "Building local Docker image..." if no_upload else "Building and uploading to S3..."
-            task = progress.add_task(task_description, total=None)
-            
-            result = subprocess.run(
-                command, capture_output=True, text=True, cwd="."
-            )
-            
-            if result.returncode == 0:
-                console.print(f"[bold green]✅ Build successful![/bold green]")
-            else:
-                progress.stop()
-                console.print(f"[red]Build failed (return code: {result.returncode}):[/red]")
-                if result.stderr: console.print(f"[red]{result.stderr}[/red]")
-                if result.stdout: console.print(f"[yellow]{result.stdout}[/yellow]")
-                sys.exit(1)
+        # Use Popen to stream output in real-time
+        process = subprocess.Popen(
+            command, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.STDOUT, 
+            text=True, 
+            cwd="."
+        )
+
+        # Read and print output line by line
+        console.print("[cyan]-- Build logs --[/cyan]")
+        while True:
+            output = process.stdout.readline()
+            if output == '' and process.poll() is not None:
+                break
+            if output:
+                console.print(output.strip(), style="dim")
+        
+        rc = process.poll()
+        console.print("[cyan]-- End build logs --[/cyan]")
+
+        if rc == 0:
+            console.print(f"[bold green]✅ Build successful![/bold green]")
+        else:
+            console.print(f"[red]Build failed (return code: {rc}). See logs above for details.[/red]")
+            sys.exit(1)
                 
     except Exception as e:
         console.print(f"[red]Error during build process: {e}[/red]")
@@ -306,7 +317,6 @@ def devices_add():
         "host": Prompt.ask("Device IP or hostname"),
         "user": Prompt.ask("SSH username", default="pi"),
         "port": int(Prompt.ask("SSH port", default="22")),
-        "ssh_key": Prompt.ask("Path to SSH private key (optional, leave blank for password auth)"),
     }
     
     inventory = load_inventory()
@@ -319,9 +329,6 @@ def devices_add():
         "ansible_user": device_info["user"],
         "ansible_port": device_info["port"],
     }
-    
-    if device_info["ssh_key"]:
-        inventory["edge_devices"]["hosts"][device_info["name"]]["ansible_ssh_private_key_file"] = device_info["ssh_key"]
     
     save_inventory(inventory)
     console.print(f"[green]✅ Device '[bold]{device_info['name']}[/bold]' added successfully![/green]")
@@ -383,11 +390,34 @@ def devices_remove(device_name):
         save_inventory(inventory)
         console.print(f"[green]✅ Device '{device_name}' removed successfully![/green]")
 
+@devices.command("provision")
+def devices_provision():
+    """Set up passwordless SSH access by copying your public key to devices."""
+    console.print("[bold yellow]🔑 Provisioning devices for passwordless SSH access...[/bold yellow]")
+    
+    public_key_path = Path.home() / ".ssh" / "id_rsa.pub"
+    if not public_key_path.exists():
+        console.print(f"[red]Error: Public SSH key not found at {public_key_path}[/red]")
+        console.print("Please generate one using 'ssh-keygen -t rsa -b 4096'")
+        sys.exit(1)
+
+    password = Prompt.ask("Enter the SSH password for your devices", password=True)
+    
+    create_provisioning_playbook()
+    success = _run_ansible_playbook("provision_devices.yaml", extra_vars={"ansible_ssh_pass": password})
+    
+    if success:
+        console.print("[bold green]✅ Provisioning successful! You can now connect without a password.[/bold green]")
+    
+    if os.path.exists("provision_devices.yaml"):
+        os.remove("provision_devices.yaml")
+
 @devices.command("setup")
 def devices_setup():
     """Deploy initial OTA agent to devices for the first time."""
     console.print("[bold blue]🛰️  Performing first-time setup for devices...[/bold blue]")
-    success = _run_ansible_playbook()
+    create_setup_playbook()
+    success = _run_ansible_playbook("setup_devices.yaml")
     if success:
         console.print("[bold green]✅ Device setup and initial deployment successful![/bold green]")
 
@@ -395,7 +425,8 @@ def devices_setup():
 def trigger():
     """Trigger an update check on all devices without building a new version."""
     console.print("[bold blue]📡 Triggering update on all devices...[/bold blue]")
-    success = _run_ansible_playbook()
+    create_setup_playbook()
+    success = _run_ansible_playbook("setup_devices.yaml")
     if success:
         console.print("[bold green]✅ Update trigger signal sent successfully![/bold green]")
         console.print("[dim]Devices will now check S3 for the latest version.[/dim]")
@@ -452,7 +483,7 @@ def status():
 @click.option('--full', is_flag=True, help="Remove all generated project files, not just temporary ones.")
 def clean(full):
     """Clean up temporary or all generated files."""
-    files_to_clean = ["*.tar", "*.sig", "*.sha256", "setup_devices.yaml"]
+    files_to_clean = ["*.tar", "*.sig", "*.sha256", "setup_devices.yaml", "provision_devices.yaml"]
     
     if full:
         console.print("[bold red]🧹 Performing full clean...[/bold red]")
@@ -492,6 +523,22 @@ def save_inventory(inventory):
     with open(ANSIBLE_INVENTORY, "w") as f:
         yaml.dump(inventory, f, default_flow_style=False)
 
+def create_provisioning_playbook():
+    """Create the Ansible playbook for copying the SSH key."""
+    playbook_content = f"""---
+- name: Provision SSH key for passwordless access
+  hosts: edge_devices
+  gather_facts: no
+  tasks:
+    - name: Copy public key to remote host
+      ansible.posix.authorized_key:
+        user: "{{{{ ansible_user }}}}"
+        state: present
+        key: "{{{{ lookup('file', '{Path.home() / ".ssh" / "id_rsa.pub"}') }}}}"
+"""
+    with open("provision_devices.yaml", "w") as f:
+        f.write(playbook_content)
+
 def create_setup_playbook():
     """Create the Ansible playbook for device setup."""
     playbook_content = f"""---
@@ -527,7 +574,6 @@ def create_setup_playbook():
     - name: Run the OTA deployment script
       ansible.builtin.shell:
         cmd: "cd ~ && ./edge_deploy.sh"
-        warn: no # Suppress warnings about using shell over command
       register: deployment_result
       changed_when: "'New version found' in deployment_result.stdout"
 
@@ -578,6 +624,11 @@ esac
 
 read -p "Enter the name of your main program file (e.g., main.cpp, app.py): " PRG_FILE
 
+ADDITIONAL_PACKAGES=""
+if [ "$LANGUAGE" == "cpp" ] || [ "$LANGUAGE" == "c" ]; then
+    read -p "Enter any additional APT packages to install (space-separated, e.g., libcpr-dev): " ADDITIONAL_PACKAGES
+fi
+
 # --- Derive variables ---
 EXTENSION="${PRG_FILE##*.}"
 PRG_FILE_BASENAME=$(basename "$PRG_FILE" .${EXTENSION})
@@ -591,7 +642,7 @@ esac
 
 # --- Configuration ---
 DOCKER_IMAGE_TAG="1.0"
-S3_BUCKET="iot-ota-rtupdate" # This will be overwritten by config, but set a default
+S3_BUCKET="iot-ota-rtupdate"
 PRIVATE_KEY="ota_private.pem"
 PUBLIC_KEY="ota_public.pem"
 IMAGE_TAR="${PRG_FILE_BASENAME}.tar"
@@ -614,7 +665,7 @@ case "$LANGUAGE" in
 FROM ${BASE}
 WORKDIR /app
 COPY . /app
-RUN apt-get update && apt-get install -y build-essential && g++ ${PRG_FILE} -o ${PRG_FILE_BASENAME}
+RUN apt-get update && apt-get install -y build-essential ${ADDITIONAL_PACKAGES} && g++ "${PRG_FILE}" -o "${PRG_FILE_BASENAME}"
 CMD ["./${PRG_FILE_BASENAME}"]
 EOF
         ;;
@@ -624,7 +675,7 @@ EOF
 FROM ${BASE}
 WORKDIR /app
 COPY . /app
-RUN apt-get update && apt-get install -y build-essential && gcc ${PRG_FILE} -o ${PRG_FILE_BASENAME}
+RUN apt-get update && apt-get install -y build-essential ${ADDITIONAL_PACKAGES} && gcc "${PRG_FILE}" -o "${PRG_FILE_BASENAME}"
 CMD ["./${PRG_FILE_BASENAME}"]
 EOF
         ;;
@@ -646,7 +697,7 @@ EOF
             cat > Dockerfile <<EOF
 FROM ${BASE_RUNTIME}
 WORKDIR /app
-COPY ${PRG_FILE} .
+COPY "${PRG_FILE}" .
 CMD ["java", "-jar", "${PRG_FILE}"]
 EOF
         else
@@ -654,11 +705,11 @@ EOF
 FROM ${BASE_BUILDER} AS builder
 WORKDIR /build
 COPY . .
-RUN javac ${PRG_FILE} -d .
+RUN javac "${PRG_FILE}" -d .
 
 FROM ${BASE_RUNTIME}
 WORKDIR /app
-COPY --from=builder /build/${PRG_FILE_BASENAME}.class .
+COPY --from=builder "/build/${PRG_FILE_BASENAME}.class" .
 CMD ["java", "${PRG_FILE_BASENAME}"]
 EOF
         fi
@@ -668,8 +719,8 @@ echo "Dockerfile created."
 
 # --- Generate Keys ---
 if [[ ! -f "$PRIVATE_KEY" ]]; then
-    openssl genpkey -algorithm RSA -out $PRIVATE_KEY -pkeyopt rsa_keygen_bits:2048
-    openssl rsa -pubout -in $PRIVATE_KEY -out $PUBLIC_KEY
+    openssl genpkey -algorithm RSA -out "$PRIVATE_KEY" -pkeyopt rsa_keygen_bits:2048
+    openssl rsa -pubout -in "$PRIVATE_KEY" -out "$PUBLIC_KEY"
     echo "Generated new RSA key pair."
 fi
 
@@ -682,29 +733,33 @@ S3_BASE_URL="https://${S3_BUCKET}.s3.amazonaws.com/${DIRECTORY_NAME}"
 WORKDIR="${DIRECTORY_NAME}"
 PUBLIC_KEY="ota_public.pem"
 CONTAINER_NAME="${PRG_FILE_BASENAME}_ota_app"
+IMAGE_TAR="${PRG_FILE_BASENAME}.tar"
+IMAGE_SIG="${IMAGE_TAR}.sig"
+VERSION_FILE="version.yaml"
+VERSION_SIG="version.yaml.sig"
+IMAGE_NAME="${IMAGE_NAME}"
 
 mkdir -p "\$WORKDIR"
 cd "\$WORKDIR"
 
 echo "Checking for updates..."
-LOCAL_VERSION_TS="1970-01-01T00:00:00Z" # Assume very old date if no local version exists
+LOCAL_VERSION_TS="1970-01-01T00:00:00Z"
 if [ -f "version.yaml" ]; then
     LOCAL_VERSION_TS=\$(grep "last_build" "version.yaml" | cut -d'"' -f2)
 fi
 
 # Download remote version file to check timestamp
-if ! aws s3 cp "\${S3_BASE_URL}/version.yaml" remote_version.yaml --quiet; then
-    echo "Could not download remote version file. Is the device configured for AWS?"
+if ! wget -q -O remote_version.yaml "\${S3_BASE_URL}/version.yaml"; then
+    echo "Could not download remote version file. Is the S3 object public?"
     exit 1
 fi
 REMOTE_VERSION_TS=\$(grep "last_build" remote_version.yaml | cut -d'"' -f2)
 
 if [ "\$REMOTE_VERSION_TS" == "\$LOCAL_VERSION_TS" ]; then
     echo "Already up to date."
-    # Ensure container is running if it exists
     if ! docker ps -q -f name="^/\${CONTAINER_NAME}\$" | grep -q .; then
       echo "Container is not running. Starting it..."
-      docker start \$CONTAINER_NAME || echo "Failed to start container. It may need a fresh deployment."
+      docker start \$CONTAINER_NAME || echo "Failed to start container."
     fi
     rm -f remote_version.yaml
     exit 0
@@ -713,9 +768,9 @@ fi
 echo "New version found (\${REMOTE_VERSION_TS}). Updating..."
 
 # Download all deployment artifacts
-aws s3 cp "\${S3_BASE_URL}/${IMAGE_TAR}" "${IMAGE_TAR}" --quiet
-aws s3 cp "\${S3_BASE_URL}/${IMAGE_SIG}" "${IMAGE_SIG}" --quiet
-aws s3 cp "\${S3_BASE_URL}/${VERSION_SIG}" "remote_version.yaml.sig" --quiet
+wget -q -O "\${IMAGE_TAR}" "\${S3_BASE_URL}/\${IMAGE_TAR}"
+wget -q -O "\${IMAGE_TAR}.sig" "\${S3_BASE_URL}/\${IMAGE_TAR}.sig"
+wget -q -O "remote_version.yaml.sig" "\${S3_BASE_URL}/\${VERSION_SIG}"
 
 # --- Verify Signatures ---
 echo "Verifying signatures..."
@@ -727,8 +782,8 @@ if ! openssl pkeyutl -verify -pubin -inkey "\${PUBLIC_KEY}" -sigfile remote_vers
 fi
 echo "Version file signature OK."
 
-openssl dgst -sha256 -binary "${IMAGE_TAR}" > image.sha256
-if ! openssl pkeyutl -verify -pubin -inkey "\${PUBLIC_KEY}" -sigfile "${IMAGE_SIG}" -in image.sha256; then
+openssl dgst -sha256 -binary "\${IMAGE_TAR}" > image.sha256
+if ! openssl pkeyutl -verify -pubin -inkey "\${PUBLIC_KEY}" -sigfile "\${IMAGE_TAR}.sig" -in image.sha256; then
     echo "ERROR: Image signature verification failed!"
     rm -f remote* *.tar *.sig image.sha256
     exit 1
@@ -743,10 +798,10 @@ if [ \$(docker ps -a -q -f name="^/\${CONTAINER_NAME}\$") ]; then
 fi
 
 echo "Loading new image..."
-docker load -i "${IMAGE_TAR}"
+docker load -i "\${IMAGE_TAR}"
 
 echo "Starting new container..."
-docker run -d --name \$CONTAINER_NAME --restart always "${IMAGE_NAME}"
+docker run -d --name \$CONTAINER_NAME --restart always "\${IMAGE_NAME}"
 
 mv remote_version.yaml version.yaml
 rm -f *.tar *.sig *.sha256

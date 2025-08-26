@@ -1,0 +1,44 @@
+---
+- name: Deploy OTA Agent and Trigger Update
+  hosts: edge_devices
+  gather_facts: no
+  become: no # Assumes user has docker permissions
+  tasks:
+    - name: Get project directory name from localhost
+      delegate_to: localhost
+      run_once: true
+      set_fact:
+        project_dir_name: "cli-test"
+
+    - name: Ensure project directory exists on device
+      ansible.builtin.file:
+        path: "~/{{ project_dir_name }}"
+        state: directory
+        mode: '0755'
+
+    - name: Copy public key for signature verification
+      ansible.builtin.copy:
+        src: ota_public.pem
+        dest: "~/{{ project_dir_name }}/ota_public.pem"
+        mode: '0644'
+
+    - name: Copy the OTA deployment script to the device
+      ansible.builtin.copy:
+        src: edge_deploy.sh
+        dest: "~/edge_deploy.sh"
+        mode: '0755'
+
+    - name: Run the OTA deployment script
+      ansible.builtin.shell:
+        cmd: "cd ~ && ./edge_deploy.sh"
+      register: deployment_result
+      changed_when: "'New version found' in deployment_result.stdout"
+
+    - name: Show deployment output
+      ansible.builtin.debug:
+        msg: "{{ deployment_result.stdout_lines }}"
+
+    - name: Show deployment errors (if any)
+      ansible.builtin.debug:
+        msg: "{{ deployment_result.stderr_lines }}"
+      when: deployment_result.stderr | length > 0

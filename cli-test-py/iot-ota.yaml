@@ -1,7 +1,0 @@
-docker_image_tag: '1.0'
-edge_device: rpi3b
-language: python
-program_basename: process
-program_file: process.py
-s3_bucket: cli-trigger-test
-version: 1.0.0

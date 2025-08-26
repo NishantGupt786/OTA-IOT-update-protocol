@@ -1,0 +1,7 @@
+docker_image_tag: '1.0'
+edge_device: rpi3b
+language: python
+program_basename: main
+program_file: main.py
+s3_bucket: pleasework
+version: 1.0.0

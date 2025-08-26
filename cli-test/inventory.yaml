@@ -1,0 +1,6 @@
+edge_devices:
+  hosts:
+    pi:
+      ansible_host: 10.42.0.14
+      ansible_port: 22
+      ansible_user: pi
