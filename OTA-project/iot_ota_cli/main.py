@@ -459,6 +459,33 @@ def deploy():
     console.print("\n[bold green]🎉 Full deployment cycle complete![/bold green]")
 
 @cli.command()
+def deploy_only():
+    """Deploy existing build to all devices without rebuilding."""
+    console.print("[bold blue]📡 Deploying existing build to all devices...[/bold blue]")
+    
+    # Check if we have the necessary files
+    required_files = ["iot-ota.yaml", "edge_deploy.sh", "ota_public.pem"]
+    missing_files = [f for f in required_files if not Path(f).exists()]
+    
+    if missing_files:
+        console.print(f"[red]Error: Missing required files: {', '.join(missing_files)}[/red]")
+        console.print("[yellow]Run 'iot-ota init' first, or 'iot-ota build' to create deployment artifacts.[/yellow]")
+        sys.exit(1)
+    
+    # Check if we have a version.yaml (indicates a build has been done)
+    if not Path("version.yaml").exists():
+        console.print("[red]Error: No version.yaml found. You need to build first.[/red]")
+        console.print("[yellow]Run 'iot-ota build' to create a version before deploying.[/yellow]")
+        sys.exit(1)
+    
+    create_setup_playbook()
+    success = _run_ansible_playbook("setup_devices.yaml")
+    if success:
+        console.print("[bold green]✅ Deploy-only operation successful![/bold green]")
+        console.print("[dim]Devices have been notified to check for the latest version.[/dim]")
+
+
+@cli.command()
 def status():
     """Show current project configuration and status."""
     console.print("[bold blue]📊 Project Status[/bold blue]")
@@ -478,6 +505,111 @@ def status():
     console.print(table)
     
     devices_list()
+
+@devices.command("cron")
+@click.argument('action', type=click.Choice(['enable', 'disable', 'status']))
+def devices_cron(action):
+    """Manage automatic update cron jobs on devices."""
+    if action == "enable":
+        console.print("[bold yellow]🕐 Enabling automatic update cron jobs...[/bold yellow]")
+        create_cron_enable_playbook()
+        success = _run_ansible_playbook("cron_manage.yaml")
+        if success:
+            console.print("[bold green]✅ Cron jobs enabled! Devices will check for updates every 5 minutes.[/bold green]")
+    
+    elif action == "disable":
+        console.print("[bold yellow]🕐 Disabling automatic update cron jobs...[/bold yellow]")
+        create_cron_disable_playbook()
+        success = _run_ansible_playbook("cron_manage.yaml")
+        if success:
+            console.print("[bold green]✅ Cron jobs disabled.[/bold green]")
+    
+    elif action == "status":
+        console.print("[bold blue]🕐 Checking cron job status...[/bold blue]")
+        create_cron_status_playbook()
+        success = _run_ansible_playbook("cron_manage.yaml")
+
+def create_cron_enable_playbook():
+    """Create playbook to enable cron job."""
+    playbook_content = """---
+- name: Enable OTA Auto-Update Cron Job
+  hosts: edge_devices
+  gather_facts: no
+  tasks:
+    - name: Enable cron job for automatic OTA updates
+      ansible.builtin.cron:
+        name: "IoT OTA Auto Update Check"
+        minute: "*/5"
+        job: "cd ~ && ./edge_deploy.sh >> ~/ota_update.log 2>&1"
+        state: present
+        user: "{{ ansible_user }}"
+
+    - name: Enable log rotation cron job
+      ansible.builtin.cron:
+        name: "IoT OTA Log Rotation"
+        minute: "0"
+        hour: "0"
+        job: "[ -f ~/ota_update.log ] && tail -n 1000 ~/ota_update.log > ~/ota_update.log.tmp && mv ~/ota_update.log.tmp ~/ota_update.log"
+        state: present
+        user: "{{ ansible_user }}"
+"""
+    with open("cron_manage.yaml", "w") as f:
+        f.write(playbook_content)
+
+def create_cron_disable_playbook():
+    """Create playbook to disable cron job."""
+    playbook_content = """---
+- name: Disable OTA Auto-Update Cron Job
+  hosts: edge_devices
+  gather_facts: no
+  tasks:
+    - name: Disable cron job for automatic OTA updates
+      ansible.builtin.cron:
+        name: "IoT OTA Auto Update Check"
+        state: absent
+        user: "{{ ansible_user }}"
+
+    - name: Disable log rotation cron job
+      ansible.builtin.cron:
+        name: "IoT OTA Log Rotation"
+        state: absent
+        user: "{{ ansible_user }}"
+"""
+    with open("cron_manage.yaml", "w") as f:
+        f.write(playbook_content)
+
+def create_cron_status_playbook():
+    """Create playbook to check cron job status."""
+    playbook_content = """---
+- name: Check OTA Cron Job Status
+  hosts: edge_devices
+  gather_facts: no
+  tasks:
+    - name: List current cron jobs for user
+      ansible.builtin.shell: "crontab -l"
+      register: cron_jobs
+      failed_when: false
+
+    - name: Show cron job status
+      ansible.builtin.debug:
+        msg: |
+          Device: {{ inventory_hostname }}
+          Cron jobs:
+          {{ cron_jobs.stdout if cron_jobs.stdout else "No cron jobs found" }}
+
+    - name: Check if OTA update log exists and show recent entries
+      ansible.builtin.shell: "[ -f ~/ota_update.log ] && tail -n 10 ~/ota_update.log || echo 'No update log found'"
+      register: log_content
+
+    - name: Show recent update log entries
+      ansible.builtin.debug:
+        msg: |
+          Recent OTA update log entries:
+          {{ log_content.stdout }}
+"""
+    with open("cron_manage.yaml", "w") as f:
+        f.write(playbook_content)
+
 
 @cli.command()
 @click.option('--full', is_flag=True, help="Remove all generated project files, not just temporary ones.")
@@ -540,9 +672,9 @@ def create_provisioning_playbook():
         f.write(playbook_content)
 
 def create_setup_playbook():
-    """Create the Ansible playbook for device setup."""
+    """Create the Ansible playbook for device setup with cron job for auto-updates."""
     playbook_content = f"""---
-- name: Deploy OTA Agent and Trigger Update
+- name: Deploy OTA Agent and Setup Auto-Update Cron Job
   hosts: edge_devices
   gather_facts: no
   become: no # Assumes user has docker permissions
@@ -585,6 +717,23 @@ def create_setup_playbook():
       ansible.builtin.debug:
         msg: "{{{{ deployment_result.stderr_lines }}}}"
       when: deployment_result.stderr | length > 0
+
+    - name: Create cron job for automatic OTA updates (every 5 minutes)
+      ansible.builtin.cron:
+        name: "IoT OTA Auto Update Check"
+        minute: "*/5"
+        job: "cd ~ && ./edge_deploy.sh >> ~/ota_update.log 2>&1"
+        state: present
+        user: "{{{{ ansible_user }}}}"
+
+    - name: Create log rotation for OTA update logs
+      ansible.builtin.cron:
+        name: "IoT OTA Log Rotation"
+        minute: "0"
+        hour: "0"
+        job: "[ -f ~/ota_update.log ] && tail -n 1000 ~/ota_update.log > ~/ota_update.log.tmp && mv ~/ota_update.log.tmp ~/ota_update.log"
+        state: present
+        user: "{{{{ ansible_user }}}}"
 """
     with open("setup_devices.yaml", "w") as f:
         f.write(playbook_content)
