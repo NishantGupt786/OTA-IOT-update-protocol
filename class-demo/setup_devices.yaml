@@ -1,0 +1,61 @@
+---
+- name: Deploy OTA Agent and Setup Auto-Update Cron Job
+  hosts: edge_devices
+  gather_facts: no
+  become: no # Assumes user has docker permissions
+  tasks:
+    - name: Get project directory name from localhost
+      delegate_to: localhost
+      run_once: true
+      set_fact:
+        project_dir_name: "class-demo"
+
+    - name: Ensure project directory exists on device
+      ansible.builtin.file:
+        path: "~/{{ project_dir_name }}"
+        state: directory
+        mode: '0755'
+
+    - name: Copy public key for signature verification
+      ansible.builtin.copy:
+        src: ota_public.pem
+        dest: "~/{{ project_dir_name }}/ota_public.pem"
+        mode: '0644'
+
+    - name: Copy the OTA deployment script to the device
+      ansible.builtin.copy:
+        src: edge_deploy.sh
+        dest: "~/edge_deploy.sh"
+        mode: '0755'
+
+    - name: Run the OTA deployment script
+      ansible.builtin.shell:
+        cmd: "cd ~ && ./edge_deploy.sh"
+      register: deployment_result
+      changed_when: "'New version found' in deployment_result.stdout"
+
+    - name: Show deployment output
+      ansible.builtin.debug:
+        msg: "{{ deployment_result.stdout_lines }}"
+
+    - name: Show deployment errors (if any)
+      ansible.builtin.debug:
+        msg: "{{ deployment_result.stderr_lines }}"
+      when: deployment_result.stderr | length > 0
+
+    - name: Create cron job for automatic OTA updates (every 5 minutes)
+      ansible.builtin.cron:
+        name: "IoT OTA Auto Update Check"
+        minute: "*/5"
+        job: "cd ~ && ./edge_deploy.sh >> ~/ota_update.log 2>&1"
+        state: present
+        user: "{{ ansible_user }}"
+
+    - name: Create log rotation for OTA update logs
+      ansible.builtin.cron:
+        name: "IoT OTA Log Rotation"
+        minute: "0"
+        hour: "0"
+        job: "[ -f ~/ota_update.log ] && tail -n 1000 ~/ota_update.log > ~/ota_update.log.tmp && mv ~/ota_update.log.tmp ~/ota_update.log"
+        state: present
+        user: "{{ ansible_user }}"
