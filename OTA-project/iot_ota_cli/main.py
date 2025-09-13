@@ -186,7 +186,7 @@ def init():
     console.print("\n[bold green]✅ Project initialized successfully![/bold green]")
     console.print(f"[cyan]Project config saved to: [bold]iot-ota.yaml[/bold][/cyan]")
     console.print(f"[cyan]Next steps:[/cyan]")
-    console.print(f"  1. Configure your devices: [bold]iot-ota devices add[/bold]")
+    console.print(f"  1. Configure your devices: [bold]iot-ota devices add[/bold] or [bold]iot-ota devices bulk-setup[/bold]")
     console.print(f"  2. Provision devices for passwordless access: [bold]iot-ota devices provision[/bold]")
     console.print(f"  3. Run first-time agent setup: [bold]iot-ota devices setup[/bold]")
     console.print(f"  4. Build and deploy updates: [bold]iot-ota deploy[/bold]")
@@ -333,13 +333,149 @@ def devices_add():
     save_inventory(inventory)
     console.print(f"[green]✅ Device '[bold]{device_info['name']}[/bold]' added successfully![/green]")
 
+@devices.command("bulk-setup")
+@click.option('--file', '-f', default='devices.yaml', help="Path to devices configuration file")
+def devices_bulk_setup(file):
+    """Add and provision multiple devices from a configuration file."""
+    console.print("[bold green]📱 Bulk adding and provisioning devices[/bold green]")
+    
+    config_file = Path(file)
+    if not config_file.exists():
+        console.print(f"[red]Error: Configuration file '{file}' not found.[/red]")
+        console.print("[yellow]Create a file with device configurations. Example:[/yellow]")
+        show_devices_config_example()
+        sys.exit(1)
+    
+    try:
+        with open(config_file, 'r') as f:
+            if file.endswith('.yaml') or file.endswith('.yml'):
+                devices_config = yaml.safe_load(f)
+            else:
+                # Support JSON format as well
+                import json
+                devices_config = json.load(f)
+    except Exception as e:
+        console.print(f"[red]Error reading configuration file: {e}[/red]")
+        sys.exit(1)
+    
+    if not validate_devices_config(devices_config):
+        sys.exit(1)
+    
+    # Add all devices to inventory
+    inventory = load_inventory()
+    if "edge_devices" not in inventory:
+        inventory["edge_devices"] = {"hosts": {}}
+    
+    added_devices = []
+    for device_name, device_config in devices_config.get("devices", {}).items():
+        console.print(f"[cyan]Adding device: {device_name}[/cyan]")
+        
+        inventory["edge_devices"]["hosts"][device_name] = {
+            "ansible_host": device_config["host"],
+            "ansible_user": device_config.get("user", "pi"),
+            "ansible_port": device_config.get("port", 22),
+        }
+        added_devices.append(device_name)
+    
+    save_inventory(inventory)
+    console.print(f"[green]✅ Added {len(added_devices)} devices to inventory[/green]")
+    
+    # Provision all devices
+    console.print("\n[bold yellow]🔑 Provisioning SSH keys for all devices...[/bold yellow]")
+    
+    public_key_path = Path.home() / ".ssh" / "id_rsa.pub"
+    if not public_key_path.exists():
+        console.print(f"[red]Error: Public SSH key not found at {public_key_path}[/red]")
+        console.print("Please generate one using 'ssh-keygen -t rsa -b 4096'")
+        sys.exit(1)
+    
+    # Ask for a single password for all devices
+    password = Prompt.ask("Enter the SSH password for all devices", password=True)
+    
+    create_provisioning_playbook()  # Use the existing function
+    success = _run_ansible_playbook("provision_devices.yaml", extra_vars={"ansible_ssh_pass": password})
+    
+    if success:
+        console.print("[bold green]✅ Bulk setup and provisioning successful![/bold green]")
+        console.print(f"[cyan]Added and provisioned {len(added_devices)} devices:[/cyan]")
+        for device in added_devices:
+            console.print(f"  - {device}")
+        
+        console.print("\n[cyan]Next steps:[/cyan]")
+        console.print("  1. Run 'iot-ota devices setup' to deploy OTA agents")
+        console.print("  2. Run 'iot-ota build' and 'iot-ota deploy' to start deployments")
+    
+    # Clean up temporary files
+    if os.path.exists("provision_devices.yaml"):
+        os.remove("provision_devices.yaml")
+
+def show_devices_config_example():
+    """Show example configuration file format."""
+    example_yaml = """devices:
+  living-room-pi:
+    host: 192.168.1.100
+    user: pi
+    port: 22
+  
+  kitchen-pi:
+    host: 192.168.1.101
+    user: pi
+    port: 22
+    
+  bedroom-pi:
+    host: 192.168.1.102
+    user: ubuntu
+    port: 2222
+
+# Optional global defaults
+defaults:
+  user: pi
+  port: 22
+"""
+    
+    console.print("\n[cyan]Example devices.yaml:[/cyan]")
+    console.print(example_yaml)
+
+def validate_devices_config(config):
+    """Validate the devices configuration format."""
+    if not isinstance(config, dict):
+        console.print("[red]Error: Configuration must be a dictionary/object[/red]")
+        return False
+    
+    if "devices" not in config:
+        console.print("[red]Error: Configuration must have a 'devices' section[/red]")
+        return False
+    
+    devices = config["devices"]
+    if not isinstance(devices, dict):
+        console.print("[red]Error: 'devices' section must be a dictionary[/red]")
+        return False
+    
+    defaults = config.get("defaults", {})
+    
+    for device_name, device_config in devices.items():
+        if not isinstance(device_config, dict):
+            console.print(f"[red]Error: Device '{device_name}' configuration must be a dictionary[/red]")
+            return False
+        
+        # Check required fields
+        if "host" not in device_config:
+            console.print(f"[red]Error: Device '{device_name}' missing required 'host' field[/red]")
+            return False
+        
+        # Apply defaults
+        device_config["user"] = device_config.get("user", defaults.get("user", "pi"))
+        device_config["port"] = device_config.get("port", defaults.get("port", 22))
+    
+    return True
+
 @devices.command("list")
 def devices_list():
     """List all configured edge devices."""
     inventory = load_inventory()
     
     if not inventory.get("edge_devices", {}).get("hosts"):
-        console.print("[yellow]No devices configured. Use 'iot-ota devices add' to add one.[/yellow]")
+        console.print("[yellow]No devices configured. Use 'iot-ota devices add' or 'iot-ota devices bulk-setup' to add devices.[/yellow]")
         return
     
     table = Table(title="Configured Edge Devices")
@@ -420,91 +556,6 @@ def devices_setup():
     success = _run_ansible_playbook("setup_devices.yaml")
     if success:
         console.print("[bold green]✅ Device setup and initial deployment successful![/bold green]")
-
-@cli.command()
-def trigger():
-    """Trigger an update check on all devices without building a new version."""
-    console.print("[bold blue]📡 Triggering update on all devices...[/bold blue]")
-    create_setup_playbook()
-    success = _run_ansible_playbook("setup_devices.yaml")
-    if success:
-        console.print("[bold green]✅ Update trigger signal sent successfully![/bold green]")
-        console.print("[dim]Devices will now check S3 for the latest version.[/dim]")
-
-@cli.command()
-def deploy():
-    """A full workflow: build, upload, and deploy to all devices."""
-    console.print("[bold green]🚀 Starting full deployment cycle...[/bold green]")
-    
-    # Step 1: Build and Upload
-    console.print("\n[cyan]Step 1: Building project and uploading to S3...[/cyan]")
-    try:
-        ctx = click.Context(build, info_name='build')
-        ctx.invoke(build, no_upload=False)
-    except SystemExit as e:
-        if e.code != 0:
-            console.print("[red]Build step failed. Aborting deployment.[/red]")
-            sys.exit(1)
-    
-    # Step 2: Trigger update on devices
-    console.print("\n[cyan]Step 2: Triggering update on all devices...[/cyan]")
-    try:
-        ctx = click.Context(trigger, info_name='trigger')
-        ctx.invoke(trigger)
-    except SystemExit as e:
-        if e.code != 0:
-            console.print("[red]Device deployment step failed.[/red]")
-            sys.exit(1)
-    
-    console.print("\n[bold green]🎉 Full deployment cycle complete![/bold green]")
-
-@cli.command()
-def deploy_only():
-    """Deploy existing build to all devices without rebuilding."""
-    console.print("[bold blue]📡 Deploying existing build to all devices...[/bold blue]")
-    
-    # Check if we have the necessary files
-    required_files = ["iot-ota.yaml", "edge_deploy.sh", "ota_public.pem"]
-    missing_files = [f for f in required_files if not Path(f).exists()]
-    
-    if missing_files:
-        console.print(f"[red]Error: Missing required files: {', '.join(missing_files)}[/red]")
-        console.print("[yellow]Run 'iot-ota init' first, or 'iot-ota build' to create deployment artifacts.[/yellow]")
-        sys.exit(1)
-    
-    # Check if we have a version.yaml (indicates a build has been done)
-    if not Path("version.yaml").exists():
-        console.print("[red]Error: No version.yaml found. You need to build first.[/red]")
-        console.print("[yellow]Run 'iot-ota build' to create a version before deploying.[/yellow]")
-        sys.exit(1)
-    
-    create_setup_playbook()
-    success = _run_ansible_playbook("setup_devices.yaml")
-    if success:
-        console.print("[bold green]✅ Deploy-only operation successful![/bold green]")
-        console.print("[dim]Devices have been notified to check for the latest version.[/dim]")
-
-
-@cli.command()
-def status():
-    """Show current project configuration and status."""
-    console.print("[bold blue]📊 Project Status[/bold blue]")
-    
-    if not Path("iot-ota.yaml").exists():
-        console.print("[red]Not in an IoT OTA project directory. Run 'iot-ota init' to start.[/red]")
-        return
-    
-    with open("iot-ota.yaml", "r") as f:
-        project_config = yaml.safe_load(f)
-    
-    table = Table(title="Project Configuration (from iot-ota.yaml)")
-    table.add_column("Setting", style="cyan")
-    table.add_column("Value", style="green")
-    for key, value in project_config.items():
-        table.add_row(key, str(value))
-    console.print(table)
-    
-    devices_list()
 
 @devices.command("cron")
 @click.argument('action', type=click.Choice(['enable', 'disable', 'status']))
@@ -610,12 +661,95 @@ def create_cron_status_playbook():
     with open("cron_manage.yaml", "w") as f:
         f.write(playbook_content)
 
+@cli.command()
+def trigger():
+    """Trigger an update check on all devices without building a new version."""
+    console.print("[bold blue]📡 Triggering update on all devices...[/bold blue]")
+    create_setup_playbook()
+    success = _run_ansible_playbook("setup_devices.yaml")
+    if success:
+        console.print("[bold green]✅ Update trigger signal sent successfully![/bold green]")
+        console.print("[dim]Devices will now check S3 for the latest version.[/dim]")
+
+@cli.command()
+def deploy():
+    """A full workflow: build, upload, and deploy to all devices."""
+    console.print("[bold green]🚀 Starting full deployment cycle...[/bold green]")
+    
+    # Step 1: Build and Upload
+    console.print("\n[cyan]Step 1: Building project and uploading to S3...[/cyan]")
+    try:
+        ctx = click.Context(build, info_name='build')
+        ctx.invoke(build, no_upload=False)
+    except SystemExit as e:
+        if e.code != 0:
+            console.print("[red]Build step failed. Aborting deployment.[/red]")
+            sys.exit(1)
+    
+    # Step 2: Trigger update on devices
+    console.print("\n[cyan]Step 2: Triggering update on all devices...[/cyan]")
+    try:
+        ctx = click.Context(trigger, info_name='trigger')
+        ctx.invoke(trigger)
+    except SystemExit as e:
+        if e.code != 0:
+            console.print("[red]Device deployment step failed.[/red]")
+            sys.exit(1)
+    
+    console.print("\n[bold green]🎉 Full deployment cycle complete![/bold green]")
+
+@cli.command()
+def deploy_only():
+    """Deploy existing build to all devices without rebuilding."""
+    console.print("[bold blue]📡 Deploying existing build to all devices...[/bold blue]")
+    
+    # Check if we have the necessary files
+    required_files = ["iot-ota.yaml", "edge_deploy.sh", "ota_public.pem"]
+    missing_files = [f for f in required_files if not Path(f).exists()]
+    
+    if missing_files:
+        console.print(f"[red]Error: Missing required files: {', '.join(missing_files)}[/red]")
+        console.print("[yellow]Run 'iot-ota init' first, or 'iot-ota build' to create deployment artifacts.[/yellow]")
+        sys.exit(1)
+    
+    # Check if we have a version.yaml (indicates a build has been done)
+    if not Path("version.yaml").exists():
+        console.print("[red]Error: No version.yaml found. You need to build first.[/red]")
+        console.print("[yellow]Run 'iot-ota build' to create a version before deploying.[/yellow]")
+        sys.exit(1)
+    
+    create_setup_playbook()
+    success = _run_ansible_playbook("setup_devices.yaml")
+    if success:
+        console.print("[bold green]✅ Deploy-only operation successful![/bold green]")
+        console.print("[dim]Devices have been notified to check for the latest version.[/dim]")
+
+@cli.command()
+def status():
+    """Show current project configuration and status."""
+    console.print("[bold blue]📊 Project Status[/bold blue]")
+    
+    if not Path("iot-ota.yaml").exists():
+        console.print("[red]Not in an IoT OTA project directory. Run 'iot-ota init' to start.[/red]")
+        return
+    
+    with open("iot-ota.yaml", "r") as f:
+        project_config = yaml.safe_load(f)
+    
+    table = Table(title="Project Configuration (from iot-ota.yaml)")
+    table.add_column("Setting", style="cyan")
+    table.add_column("Value", style="green")
+    for key, value in project_config.items():
+        table.add_row(key, str(value))
+    console.print(table)
+    
+    devices_list()
 
 @cli.command()
 @click.option('--full', is_flag=True, help="Remove all generated project files, not just temporary ones.")
 def clean(full):
     """Clean up temporary or all generated files."""
-    files_to_clean = ["*.tar", "*.sig", "*.sha256", "setup_devices.yaml", "provision_devices.yaml"]
+    files_to_clean = ["*.tar", "*.sig", "*.sha256", "setup_devices.yaml", "provision_devices.yaml", "cron_manage.yaml"]
     
     if full:
         console.print("[bold red]🧹 Performing full clean...[/bold red]")

@@ -5,12 +5,11 @@ from datetime import datetime
 def send_timestamp_webhook():
     webhook_url = "https://webhook.site/9dcdcd3f-a848-496d-b9ca-07dfb1760ef5"  # Get one from webhook.site
     
-    # Generate current timestamp
     current_time = datetime.now()
     timestamp_data = {
         "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
         "unix_timestamp": current_time.timestamp(),
-        "message": "nishant & sumit!"
+        "message": "Code is working!"
     }
     
     try:
